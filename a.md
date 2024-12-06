@@ -1,3 +1,7 @@
+Gm, Now that the contract is working fine, i am willing to add some additional functionalities to make it more suitable for use, because i want to make this token contract to be able to use as payment on my product, so what functionalities do you think i should add? i am already thinking of `ft_approve` , `ft_transfer_from` , `ft_reduce_approval` what do you suggest?
+this is the contract code below:
+
+```contract.ts
 import {
   NearBindgen,
   near,
@@ -19,21 +23,12 @@ interface FungibleTokenMetadata {
   decimals: number;
 }
 
-interface Approval {
-  //
-  amount: string;
-  expires_at?: number;
-} //
-
 @NearBindgen({})
 class FungibleToken {
   totalSupply: string;
   accounts: LookupMap<string>;
   metadata: FungibleTokenMetadata;
   owner_id: AccountId;
-  allowances: LookupMap<Map<AccountId, Approval>>; //
-  fee_percentage: number; //
-  fee_recipient: AccountId; //
 
   constructor() {
     this.totalSupply = '1000000000000000000000000000'; // 1,000,000,000 tokens with 18 decimals
@@ -47,24 +42,16 @@ class FungibleToken {
       reference_hash: null,
       decimals: 18,
     };
-    this.allowances = new LookupMap('l'); //
-    this.fee_percentage = 0; // No fee by default //
-    this.fee_recipient = ''; //
-    this.owner_id = ''; //
+    this.owner_id = '';
   }
 
-  /////////////////-----------init function--------------//////////////////////
   @initialize({})
   init({
     owner_id,
     metadata,
-    fee_percentage = 0, //
-    fee_recipient, //
   }: {
     owner_id: AccountId;
     metadata?: FungibleTokenMetadata;
-    fee_percentage?: number; //
-    fee_recipient?: AccountId; //
   }): void {
     // Ensure the contract isn't already initialized
     if (this.owner_id !== '') {
@@ -82,197 +69,24 @@ class FungibleToken {
       this.metadata = metadata;
     }
 
-    if (fee_percentage > 0) {
-      //
-      if (fee_percentage > 1000) {
-        throw new Error(
-          'Fee percentage to high and cannot be greater than 1000'
-        );
-      }
-      this.fee_percentage = fee_percentage;
-      this.fee_recipient = fee_recipient || owner_id;
-    } //
-
     near.log(`Contract initialized with owner: ${owner_id}`);
   }
 
-  //////////////////////////--------------------Approve-----------------////////////////////////////
-  @call({ payableFunction: true })
-  ft_approve({
-    spender_id,
-    amount,
-    expires_at,
-  }: {
-    spender_id: AccountId;
-    amount: string;
-    expires_at?: number;
-  }): void {
-    if (near.attachedDeposit() != BigInt(1)) {
-      throw new Error('Requires attached deposit of exactly 1 yoctoNEAR');
-    }
-
-    const owner_id = near.predecessorAccountId();
-    const amount_n = BigInt(amount);
-
-    // Check owner's balance
-    const owner_balance = BigInt(this.accounts.get(owner_id) || '0');
-    if (owner_balance < amount_n) {
-      throw new Error("Can't approve more than available balance");
-    }
-
-    let approvals =
-      this.allowances.get(owner_id) || new Map<AccountId, Approval>();
-    approvals.set(spender_id, { amount, expires_at });
-    this.allowances.set(owner_id, approvals);
-  }
-
-  /////////////------------------batch transfer-------------------/////////////////
-  @call({ payableFunction: true })
-  ft_batch_transfer({
-    transfers,
-  }: {
-    transfers: {
-      receiver_id: AccountId;
-      amount: string;
-      memo?: string;
-    }[];
-  }): void {
-    if (near.attachedDeposit() != BigInt(1)) {
-      throw new Error('Requires attached deposit of exactly 1 yoctoNEAR');
-    }
-
-    const sender_id = near.predecessorAccountId();
-    let total_amount = BigInt(0);
-
-    // Calculate total first
-    for (const transfer of transfers) {
-      total_amount += BigInt(transfer.amount);
-    }
-
-    // Check sender's balance
-    const sender_balance = BigInt(this.accounts.get(sender_id) || '0');
-    if (sender_balance < total_amount) {
-      throw new Error('Insufficient balance for batch transfer');
-    }
-
-    // Process transfers
-    for (const transfer of transfers) {
-      this.internal_transfer(
-        sender_id,
-        transfer.receiver_id,
-        transfer.amount,
-        transfer.memo
-      );
-    }
-  }
-
-  /////////////////-----------------helper method-----------------/////////////////////////
-
-  // Added this private helper method
-  private internal_register_account(account_id: AccountId): void {
-    if (!this.accounts.get(account_id)) {
-      this.accounts.set(account_id, '0');
-    }
-  }
-
-  //Added this private fee calculator
-  private calculate_fee(amount: bigint): bigint {
-    return (amount * BigInt(this.fee_percentage)) / BigInt(10000);
-  }
-
-  //Added this private internal transfer
-  private internal_transfer(
-    sender_id: AccountId,
-    receiver_id: AccountId,
-    amount: string,
-    memo?: string
-  ): void {
-    const amount_n = BigInt(amount);
-    const fee = this.calculate_fee(amount_n);
-    const net_amount = amount_n - fee;
-
-    // Update sender balance
-    const sender_balance = BigInt(this.accounts.get(sender_id) || '0');
-    this.accounts.set(sender_id, (sender_balance - amount_n).toString());
-
-    // Update receiver balance
-    const receiver_balance = BigInt(this.accounts.get(receiver_id) || '0');
-    this.accounts.set(receiver_id, (receiver_balance + net_amount).toString());
-
-    // Transfer fee if applicable
-    if (fee > BigInt(0)) {
-      const fee_recipient_balance = BigInt(
-        this.accounts.get(this.fee_recipient) || '0'
-      );
-      this.accounts.set(
-        this.fee_recipient,
-        (fee_recipient_balance + fee).toString()
-      );
-    }
-
-    // Emit transfer event
-    near.log(
-      `EVENT_JSON:${JSON.stringify({
-        standard: 'nep141',
-        version: '1.0.0',
-        event: 'ft_transfer',
-        data: [
-          {
-            old_owner_id: sender_id,
-            new_owner_id: receiver_id,
-            amount: net_amount.toString(),
-            memo: memo || '',
-          },
-        ],
-      })}`
-    );
-  }
-
-  ////////////-------------------------VIEW METHODS---------------------/////////////////////
-
-  //view allowances
-  @view({})
-  ft_allowance({
-    owner_id,
-    spender_id,
-  }: {
-    owner_id: AccountId;
-    spender_id: AccountId;
-  }): string {
-    const approvals = this.allowances.get(owner_id);
-    if (!approvals) return '0';
-
-    const approval = approvals.get(spender_id);
-    if (!approval) return '0';
-
-    if (approval.expires_at && approval.expires_at < near.blockTimestamp()) {
-      return '0';
-    }
-
-    return approval.amount;
-  }
-
-  //View balnce of a specific account
   @view({})
   ft_balance_of({ account_id }: { account_id: AccountId }): string {
     return this.accounts.get(account_id) || '0';
   }
 
-  // view contract metadata
   @view({})
   ft_metadata(): FungibleTokenMetadata {
     return this.metadata;
   }
 
-  // view total supply
   @view({})
   ft_total_supply(): string {
     return this.totalSupply;
   }
 
-  ///////////-------------------CALL METHODS---------------------////////////////////////
-
-  ///Transfer function
   @call({ payableFunction: true })
   ft_transfer({
     receiver_id,
@@ -322,59 +136,14 @@ class FungibleToken {
     );
   }
 
-  //Burn function
-  @call({})
-  ft_burn({ amount }: { amount: string }): void {
-    const burner_id = near.predecessorAccountId();
-    const amount_n = BigInt(amount);
-
-    if (amount_n <= BigInt(0)) {
-      throw new Error('Amount must be positive');
+  // Add ft_transfer_call for better wallet integration
+  // Add this private helper method
+  private internal_register_account(account_id: AccountId): void {
+    if (!this.accounts.get(account_id)) {
+      this.accounts.set(account_id, '0');
     }
-
-    // Get burner's current balance from this.accounts (our storage)
-    const burner_balance = BigInt(this.accounts.get(burner_id) || '0');
-
-    // Check if burner has enough balance
-    if (burner_balance < amount_n) {
-      throw new Error(
-        `Insufficient balance. Available: ${burner_balance}, Required: ${amount_n}`
-      );
-    }
-
-    // Check if amount doesn't exceed total supply
-    const current_total_supply = BigInt(this.totalSupply);
-    if (amount_n > current_total_supply) {
-      throw new Error('Burn amount exceeds total supply');
-    }
-
-    // Update burner's balance
-    const new_balance = burner_balance - amount_n;
-    this.accounts.set(burner_id, new_balance.toString());
-
-    // Update total supply
-    const new_total_supply = current_total_supply - amount_n;
-    this.totalSupply = new_total_supply.toString();
-
-    // Emit burn event
-    near.log(
-      `EVENT_JSON:${JSON.stringify({
-        standard: 'nep141',
-        version: '1.0.0',
-        event: 'ft_burn',
-        data: [
-          {
-            burner_id: burner_id,
-            amount: amount_n.toString(),
-            new_balance: new_balance.toString(),
-            new_total_supply: new_total_supply.toString(),
-          },
-        ],
-      })}`
-    );
   }
 
-  // Added ft_transfer_call for better wallet integration
   @call({ payableFunction: true })
   ft_transfer_call({
     receiver_id,
@@ -439,7 +208,6 @@ class FungibleToken {
     );
   }
 
-  //Storage_deposit
   @call({ payableFunction: true })
   storage_deposit({ account_id }: { account_id?: AccountId }): StorageBalance {
     const accountId = account_id || near.predecessorAccountId();
@@ -465,8 +233,6 @@ class FungibleToken {
       available: '0',
     };
   }
-
-  //////////////-------------------view methods-----------------//////////////////
 
   @view({})
   storage_balance_bounds(): { min: string; max: string } {
@@ -510,3 +276,7 @@ interface StorageBalance {
   total: string;
   available: string;
 }
+
+```
+
+Yes i will like you to provide the implementations for additional features, but i am confused about the approve and the transfer_from function.. do the owner have to be approved before he can spend? i am thinking that the owner is automatically approved to spend in as much he has > 1 in balances. and the then he can not spend than his balance, nor transfer than his balance, and then he can not approve other user than his balance, and only the owner can approve another account to spend, and the spender can't spend nor trnasfer more than the approved balance. make me understnad this if i am mistaken and if i am right, let work it out in a perfect and standard form

@@ -2216,6 +2216,77 @@ var TypeBrand;
   TypeBrand["BIGINT"] = "bigint";
   TypeBrand["DATE"] = "date";
 })(TypeBrand || (TypeBrand = {}));
+function getValueWithOptions(subDatatype, value, options = {
+  deserializer: deserialize
+}) {
+  if (value === null) {
+    return options?.defaultValue ?? null;
+  }
+  // here is an obj
+  let deserialized = deserialize(value);
+  if (deserialized === undefined || deserialized === null) {
+    return options?.defaultValue ?? null;
+  }
+  if (options?.reconstructor) {
+    // example: // { collection: {reconstructor: LookupMap.reconstruct, value: 'string'}}
+    const collection = options.reconstructor(deserialized);
+    if (subDatatype !== undefined &&
+    // eslint-disable-next-line no-prototype-builtins
+    subDatatype.hasOwnProperty("class") &&
+    // eslint-disable-next-line no-prototype-builtins
+    subDatatype["class"].hasOwnProperty("value")) {
+      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+      // @ts-ignore
+      collection.subtype = function () {
+        // example: {class: UnorderedMap, value: UnorderedMap}
+        return subDatatype["class"]["value"];
+      };
+    }
+    return collection;
+  }
+  // example: { collection: {reconstructor: LookupMap.reconstruct, value: 'string'}}
+  if (subDatatype !== undefined) {
+    // subtype info is a class constructor, Such as Car
+    if (typeof subDatatype === "function") {
+      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+      // @ts-ignore
+      deserialized = decodeObj2class(new subDatatype(), deserialized);
+    } else if (typeof subDatatype === "object") {
+      // normal collections of array, map; subtype will be:
+      //  {map: { key: 'string', value: 'string' }} or {array: {value: 'string'}} ..
+      // eslint-disable-next-line no-prototype-builtins
+      if (subDatatype.hasOwnProperty("map")) {
+        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+        // @ts-ignore
+        for (const mkey in deserialized) {
+          if (subDatatype["map"]["value"] !== "string") {
+            deserialized[mkey] = decodeObj2class(new subDatatype["map"]["value"](), value[mkey]);
+          }
+        }
+        // eslint-disable-next-line no-prototype-builtins
+      } else if (subDatatype.hasOwnProperty("array")) {
+        const new_vec = [];
+        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+        // @ts-ignore
+        for (const k in deserialized) {
+          if (subDatatype["array"]["value"] !== "string") {
+            new_vec.push(decodeObj2class(new subDatatype["array"]["value"](), value[k]));
+          }
+        }
+        deserialized = new_vec;
+        // eslint-disable-next-line no-prototype-builtins
+      }
+    }
+  }
+  return deserialized;
+}
+function serializeValueWithOptions(value, {
+  serializer
+} = {
+  serializer: serialize
+}) {
+  return serializer(value);
+}
 function serialize(valueToSerialize) {
   return encode(JSON.stringify(valueToSerialize, function (key, value) {
     if (typeof value === "bigint") {
@@ -2408,6 +2479,12 @@ function currentAccountId() {
   return str(env.read_register(0));
 }
 /**
+ * Returns the current block timestamp.
+ */
+function blockTimestamp() {
+  return env.block_timestamp();
+}
+/**
  * Returns the amount of NEAR attached to this function call.
  * Can only be called in payable functions.
  */
@@ -2427,6 +2504,28 @@ function storageReadRaw(key) {
   return env.read_register(0);
 }
 /**
+ * Checks for the existance of a value under the provided key in NEAR storage.
+ *
+ * @param key - The key to check for in storage.
+ */
+function storageHasKeyRaw(key) {
+  return env.storage_has_key(key) === 1n;
+}
+/**
+ * Checks for the existance of a value under the provided utf-8 string key in NEAR storage.
+ *
+ * @param key - The utf-8 string key to check for in storage.
+ */
+function storageHasKey(key) {
+  return storageHasKeyRaw(encode(key));
+}
+/**
+ * Get the last written or removed value from NEAR storage.
+ */
+function storageGetEvictedRaw() {
+  return env.read_register(EVICTED_REGISTER);
+}
+/**
  * Writes the provided bytes to NEAR storage under the provided key.
  *
  * @param key - The key under which to store the value.
@@ -2434,6 +2533,28 @@ function storageReadRaw(key) {
  */
 function storageWriteRaw(key, value) {
   return env.storage_write(key, value, EVICTED_REGISTER) === 1n;
+}
+/**
+ * Removes the value of the provided key from NEAR storage.
+ *
+ * @param key - The key to be removed.
+ */
+function storageRemoveRaw(key) {
+  return env.storage_remove(key, EVICTED_REGISTER) === 1n;
+}
+/**
+ * Removes the value of the provided utf-8 string key from NEAR storage.
+ *
+ * @param key - The utf-8 string key to be removed.
+ */
+function storageRemove(key) {
+  return storageRemoveRaw(encode(key));
+}
+/**
+ * Returns the cost of storing 0 Byte on NEAR storage.
+ */
+function storageByteCost() {
+  return 10000000000000000000n;
 }
 /**
  * Returns the arguments passed to the current smart contract call.
@@ -2447,6 +2568,165 @@ function inputRaw() {
  */
 function input() {
   return decode(inputRaw());
+}
+/**
+ * Create a NEAR promise which will have multiple promise actions inside.
+ *
+ * @param accountId - The account ID of the target contract.
+ */
+function promiseBatchCreate(accountId) {
+  return env.promise_batch_create(accountId);
+}
+/**
+ * Attach a function call promise action to the NEAR promise index with the provided promise index.
+ *
+ * @param promiseIndex - The index of the promise to attach a function call action to.
+ * @param methodName - The name of the method to be called.
+ * @param args - The arguments to call the method with.
+ * @param amount - The amount of NEAR to attach to the call.
+ * @param gas - The amount of Gas to attach to the call.
+ */
+function promiseBatchActionFunctionCallRaw(promiseIndex, methodName, args, amount, gas) {
+  env.promise_batch_action_function_call(promiseIndex, methodName, args, amount, gas);
+}
+/**
+ * Attach a function call promise action to the NEAR promise index with the provided promise index.
+ *
+ * @param promiseIndex - The index of the promise to attach a function call action to.
+ * @param methodName - The name of the method to be called.
+ * @param args - The utf-8 string arguments to call the method with.
+ * @param amount - The amount of NEAR to attach to the call.
+ * @param gas - The amount of Gas to attach to the call.
+ */
+function promiseBatchActionFunctionCall(promiseIndex, methodName, args, amount, gas) {
+  promiseBatchActionFunctionCallRaw(promiseIndex, methodName, encode(args), amount, gas);
+}
+/**
+ * Attach a transfer promise action to the NEAR promise index with the provided promise index.
+ *
+ * @param promiseIndex - The index of the promise to attach a transfer action to.
+ * @param amount - The amount of NEAR to transfer.
+ */
+function promiseBatchActionTransfer(promiseIndex, amount) {
+  env.promise_batch_action_transfer(promiseIndex, amount);
+}
+
+class SubType {
+  /* eslint-disable @typescript-eslint/no-explicit-any */
+  /* eslint-disable @typescript-eslint/no-empty-function */
+  subtype() {}
+  set_reconstructor(options) {
+    if (options == undefined) {
+      options = {};
+    }
+    const subtype = this.subtype();
+    if (options.reconstructor == undefined && subtype != undefined) {
+      if (
+      // eslint-disable-next-line no-prototype-builtins
+      subtype.hasOwnProperty("class") && typeof subtype.class.reconstruct === "function") {
+        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+        // @ts-ignore
+        options.reconstructor = subtype.class.reconstruct;
+      } else if (typeof subtype.reconstruct === "function") {
+        options.reconstructor = subtype.reconstruct;
+      }
+    }
+    return options;
+  }
+}
+
+/**
+ * A lookup map that stores data in NEAR storage.
+ */
+class LookupMap extends SubType {
+  /**
+   * @param keyPrefix - The byte prefix to use when storing elements inside this collection.
+   */
+  constructor(keyPrefix) {
+    super();
+    this.keyPrefix = keyPrefix;
+  }
+  /**
+   * Checks whether the collection contains the value.
+   *
+   * @param key - The value for which to check the presence.
+   */
+  containsKey(key) {
+    const storageKey = this.keyPrefix + key;
+    return storageHasKey(storageKey);
+  }
+  /**
+   * Get the data stored at the provided key.
+   *
+   * @param key - The key at which to look for the data.
+   * @param options - Options for retrieving the data.
+   */
+  get(key, options) {
+    const storageKey = this.keyPrefix + key;
+    const value = storageReadRaw(encode(storageKey));
+    if (options == undefined) {
+      options = {};
+    }
+    options = this.set_reconstructor(options);
+    return getValueWithOptions(this.subtype(), value, options);
+  }
+  /**
+   * Removes and retrieves the element with the provided key.
+   *
+   * @param key - The key at which to remove data.
+   * @param options - Options for retrieving the data.
+   */
+  remove(key, options) {
+    const storageKey = this.keyPrefix + key;
+    if (!storageRemove(storageKey)) {
+      return options?.defaultValue ?? null;
+    }
+    const value = storageGetEvictedRaw();
+    return getValueWithOptions(this.subtype(), value, options);
+  }
+  /**
+   * Store a new value at the provided key.
+   *
+   * @param key - The key at which to store in the collection.
+   * @param newValue - The value to store in the collection.
+   * @param options - Options for retrieving and storing the data.
+   */
+  set(key, newValue, options) {
+    const storageKey = this.keyPrefix + key;
+    const storageValue = serializeValueWithOptions(newValue, options);
+    if (!storageWriteRaw(encode(storageKey), storageValue)) {
+      return options?.defaultValue ?? null;
+    }
+    const value = storageGetEvictedRaw();
+    return getValueWithOptions(this.subtype(), value, options);
+  }
+  /**
+   * Extends the current collection with the passed in array of key-value pairs.
+   *
+   * @param keyValuePairs - The key-value pairs to extend the collection with.
+   * @param options - Options for storing the data.
+   */
+  extend(keyValuePairs, options) {
+    for (const [key, value] of keyValuePairs) {
+      this.set(key, value, options);
+    }
+  }
+  /**
+   * Serialize the collection.
+   *
+   * @param options - Options for storing the data.
+   */
+  serialize(options) {
+    return serializeValueWithOptions(this, options);
+  }
+  /**
+   * Converts the deserialized data from storage to a JavaScript instance of the collection.
+   *
+   * @param data - The deserialized data to create an instance from.
+   */
+  static reconstruct(data) {
+    return new LookupMap(data.keyPrefix);
+  }
 }
 
 /**
@@ -2540,48 +2820,187 @@ function NearBindgen({
   };
 }
 
-var _dec, _dec2, _dec3, _dec4, _dec5, _dec6, _dec7, _dec8, _class, _class2;
-let FungibleToken = (_dec = NearBindgen({}), _dec2 = initialize(), _dec3 = view(), _dec4 = view(), _dec5 = view(), _dec6 = call({
+var _dec, _dec2, _dec3, _dec4, _dec5, _dec6, _dec7, _dec8, _dec9, _dec10, _dec11, _dec12, _dec13, _dec14, _dec15, _class, _class2;
+//
+let FungibleToken = (_dec = NearBindgen({}), _dec2 = initialize(), _dec3 = call({
   payableFunction: true
-}), _dec7 = call({
+}), _dec4 = call({
   payableFunction: true
-}), _dec8 = view(), _dec(_class = (_class2 = class FungibleToken {
-  //   balances: LookupMap<string>;
+}), _dec5 = view(), _dec6 = view(), _dec7 = view(), _dec8 = view(), _dec9 = call({
+  payableFunction: true
+}), _dec10 = call({
+  payableFunction: true
+}), _dec11 = call({
+  payableFunction: true
+}), _dec12 = view(), _dec13 = view(), _dec14 = view(), _dec15 = view(), _dec(_class = (_class2 = class FungibleToken {
+  //
+  //
+  //
 
   constructor() {
     this.totalSupply = '1000000000000000000000000000'; // 1,000,000,000 tokens with 18 decimals
-    // this.balances = new LookupMap('b');
-    this.balances = new Map();
+    this.accounts = new LookupMap('a');
     this.metadata = {
       spec: 'ft-1.0.0',
       name: 'Example Token',
       symbol: 'EXTKN',
-      icon: 'https://testnet.nearblocks.io/images/nearblocksblack.svg',
-      reference: 'https://rferenceexample.com',
-      reference_hash: 'https://rferenceexample.com',
+      icon: 'data:image/png;base64,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',
+      reference: null,
+      reference_hash: null,
       decimals: 18
     };
-    this.owner = '';
+    this.allowances = new LookupMap('l'); //
+    this.fee_percentage = 0; // No fee by default //
+    this.fee_recipient = ''; //
+    this.owner_id = ''; //
   }
   init({
-    owner_id
+    owner_id,
+    metadata,
+    fee_percentage = 0,
+    //
+    fee_recipient //
   }) {
-    if (this.owner !== '') {
+    // Ensure the contract isn't already initialized
+    if (this.owner_id !== '') {
       throw new Error('Contract is already initialized');
     }
-    this.owner = owner_id;
-    this.balances.set(owner_id, this.totalSupply);
+
+    // Set the owner
+    this.owner_id = owner_id;
+
+    // Set initial balance for owner
+    this.accounts.set(owner_id, this.totalSupply);
+
+    // Update metadata if provided
+    if (metadata) {
+      this.metadata = metadata;
+    }
+    if (fee_percentage > 0) {
+      //
+      if (fee_percentage > 1000) {
+        throw new Error('Fee percentage to high and cannot be greater than 1000');
+      }
+      this.fee_percentage = fee_percentage;
+      this.fee_recipient = fee_recipient || owner_id;
+    } //
+
+    log(`Contract initialized with owner: ${owner_id}`);
   }
-  ft_total_supply() {
-    return this.totalSupply;
+
+  //Approve
+  ft_approve({
+    spender_id,
+    amount,
+    expires_at
+  }) {
+    if (attachedDeposit() != BigInt(1)) {
+      throw new Error('Requires attached deposit of exactly 1 yoctoNEAR');
+    }
+    const owner_id = predecessorAccountId();
+    const amount_n = BigInt(amount);
+
+    // Check owner's balance
+    const owner_balance = BigInt(this.accounts.get(owner_id) || '0');
+    if (owner_balance < amount_n) {
+      throw new Error("Can't approve more than available balance");
+    }
+    let approvals = this.allowances.get(owner_id) || new Map();
+    approvals.set(spender_id, {
+      amount,
+      expires_at
+    });
+    this.allowances.set(owner_id, approvals);
+  }
+
+  //batch transfer
+  ft_batch_transfer({
+    transfers
+  }) {
+    if (attachedDeposit() != BigInt(1)) {
+      throw new Error('Requires attached deposit of exactly 1 yoctoNEAR');
+    }
+    const sender_id = predecessorAccountId();
+    let total_amount = BigInt(0);
+
+    // Calculate total first
+    for (const transfer of transfers) {
+      total_amount += BigInt(transfer.amount);
+    }
+
+    // Check sender's balance
+    const sender_balance = BigInt(this.accounts.get(sender_id) || '0');
+    if (sender_balance < total_amount) {
+      throw new Error('Insufficient balance for batch transfer');
+    }
+
+    // Process transfers
+    for (const transfer of transfers) {
+      this.internal_transfer(sender_id, transfer.receiver_id, transfer.amount, transfer.memo);
+    }
+  }
+
+  //helper method
+  calculate_fee(amount) {
+    return amount * BigInt(this.fee_percentage) / BigInt(10000);
+  }
+  internal_transfer(sender_id, receiver_id, amount, memo) {
+    const amount_n = BigInt(amount);
+    const fee = this.calculate_fee(amount_n);
+    const net_amount = amount_n - fee;
+
+    // Update sender balance
+    const sender_balance = BigInt(this.accounts.get(sender_id) || '0');
+    this.accounts.set(sender_id, (sender_balance - amount_n).toString());
+
+    // Update receiver balance
+    const receiver_balance = BigInt(this.accounts.get(receiver_id) || '0');
+    this.accounts.set(receiver_id, (receiver_balance + net_amount).toString());
+
+    // Transfer fee if applicable
+    if (fee > BigInt(0)) {
+      const fee_recipient_balance = BigInt(this.accounts.get(this.fee_recipient) || '0');
+      this.accounts.set(this.fee_recipient, (fee_recipient_balance + fee).toString());
+    }
+
+    // Emit transfer event
+    log(`EVENT_JSON:${JSON.stringify({
+      standard: 'nep141',
+      version: '1.0.0',
+      event: 'ft_transfer',
+      data: [{
+        old_owner_id: sender_id,
+        new_owner_id: receiver_id,
+        amount: net_amount.toString(),
+        memo: memo || ''
+      }]
+    })}`);
+  }
+
+  //view allowances
+  ft_allowance({
+    owner_id,
+    spender_id
+  }) {
+    const approvals = this.allowances.get(owner_id);
+    if (!approvals) return '0';
+    const approval = approvals.get(spender_id);
+    if (!approval) return '0';
+    if (approval.expires_at && approval.expires_at < blockTimestamp()) {
+      return '0';
+    }
+    return approval.amount;
   }
   ft_balance_of({
     account_id
   }) {
-    return this.balances.get(account_id) || '0';
+    return this.accounts.get(account_id) || '0';
   }
   ft_metadata() {
     return this.metadata;
+  }
+  ft_total_supply() {
+    return this.totalSupply;
   }
   ft_transfer({
     receiver_id,
@@ -2589,65 +3008,168 @@ let FungibleToken = (_dec = NearBindgen({}), _dec2 = initialize(), _dec3 = view(
     memo
   }) {
     const sender_id = predecessorAccountId();
-    const amount_bigint = BigInt(amount);
+    const amount_n = BigInt(amount);
 
-    // Assert attached deposit is exactly 1 yoctoNEAR
-    if (attachedDeposit() !== BigInt(1)) {
+    // Assert attached deposit is at least 1 yoctoNEAR
+    if (attachedDeposit() != BigInt(1)) {
       throw new Error('Requires attached deposit of exactly 1 yoctoNEAR');
     }
 
-    // Ensure positive transfer amount
-    if (amount_bigint <= BigInt(0)) {
-      throw new Error('The amount should be a positive number');
+    // Check sender has sufficient balance
+    const sender_balance = BigInt(this.accounts.get(sender_id) || '0');
+    if (sender_balance < amount_n) {
+      throw new Error('Insufficient balance');
     }
 
-    // Check and update sender balance
-    const sender_balance = BigInt(this.balances.get(sender_id) || '0');
-    if (sender_balance < amount_bigint) {
-      throw new Error('Not enough balance');
-    }
-    this.balances.set(sender_id, (sender_balance - amount_bigint).toString());
+    // Update sender balance
+    this.accounts.set(sender_id, (sender_balance - amount_n).toString());
 
-    // Check and update receiver balance
-    const receiver_balance = BigInt(this.balances.get(receiver_id) || '0');
-    this.balances.set(receiver_id, (receiver_balance + amount_bigint).toString());
+    // Update receiver balance
+    const receiver_balance = BigInt(this.accounts.get(receiver_id) || '0');
+    this.accounts.set(receiver_id, (receiver_balance + amount_n).toString());
 
-    // Log the transfer
-    log(`Transfer ${amount} from ${sender_id} to ${receiver_id}`);
-    if (memo) {
-      log(`Memo: ${memo}`);
+    // Emit standard NEP-141 event
+    log(`EVENT_JSON:${JSON.stringify({
+      standard: 'nep141',
+      version: '1.0.0',
+      event: 'ft_transfer',
+      data: [{
+        old_owner_id: sender_id,
+        new_owner_id: receiver_id,
+        amount: amount,
+        memo: memo || ''
+      }]
+    })}`);
+  }
+
+  // Add ft_transfer_call for better wallet integration
+  // Add this private helper method
+  internal_register_account(account_id) {
+    if (!this.accounts.get(account_id)) {
+      this.accounts.set(account_id, '0');
     }
+  }
+  ft_transfer_call({
+    receiver_id,
+    amount,
+    memo,
+    msg
+  }) {
+    // Assert one yoctoNEAR was attached
+    if (attachedDeposit() != BigInt(1)) {
+      throw new Error('Requires attached deposit of exactly 1 yoctoNEAR');
+    }
+    const sender_id = predecessorAccountId();
+    // Register account if needed
+    this.internal_register_account(receiver_id);
+    // Perform the transfer
+    const amount_n = BigInt(amount);
+    const sender_balance = BigInt(this.accounts.get(sender_id) || '0');
+    if (sender_balance < amount_n) {
+      throw new Error('Insufficient balance');
+    }
+    this.accounts.set(sender_id, (sender_balance - amount_n).toString());
+    const receiver_balance = BigInt(this.accounts.get(receiver_id) || '0');
+    this.accounts.set(receiver_id, (receiver_balance + amount_n).toString());
+
+    // Emit the transfer event
+    log(`EVENT_JSON:${JSON.stringify({
+      standard: 'nep141',
+      version: '1.0.0',
+      event: 'ft_transfer',
+      data: [{
+        old_owner_id: sender_id,
+        new_owner_id: receiver_id,
+        amount: amount,
+        memo: memo || ''
+      }]
+    })}`);
+
+    // Call receiver's method
+    const promise = promiseBatchCreate(receiver_id);
+    promiseBatchActionFunctionCall(promise, 'ft_on_transfer', JSON.stringify({
+      sender_id,
+      amount,
+      msg
+    }), 0, 30000000000000);
   }
   storage_deposit({
     account_id
   }) {
     const accountId = account_id || predecessorAccountId();
-    const attachedDeposit$1 = attachedDeposit();
-    const MIN_STORAGE_BALANCE = BigInt('1250000000000000000000'); // 0.00125 NEAR
-
-    if (attachedDeposit$1 < MIN_STORAGE_BALANCE) {
-      throw new Error(`The attached deposit is less than the minimum storage balance (${MIN_STORAGE_BALANCE})`);
+    const deposit = attachedDeposit();
+    const min_balance = BigInt(this.storage_balance_bounds().min);
+    if (deposit < min_balance) {
+      throw new Error(`Deposit must be at least ${min_balance}`);
     }
-    if (!this.balances.get(accountId)) {
-      this.balances.set(accountId, '0');
+    let refund = deposit - min_balance;
+    if (!this.accounts.get(accountId)) {
+      this.accounts.set(accountId, '0');
+    }
+    if (refund > 0) {
+      const promise = promiseBatchCreate(predecessorAccountId());
+      promiseBatchActionTransfer(promise, refund);
     }
     return {
-      total: MIN_STORAGE_BALANCE.toString(),
+      total: min_balance.toString(),
       available: '0'
+    };
+  }
+  storage_balance_bounds() {
+    const required_storage_balance = BigInt(storageByteCost()) * BigInt(128);
+    return {
+      min: required_storage_balance.toString(),
+      max: required_storage_balance.toString()
     };
   }
   storage_balance_of({
     account_id
   }) {
-    if (!this.balances.get(account_id)) {
+    if (!this.accounts.get(account_id)) {
       return null;
     }
     return {
-      total: '1250000000000000000000',
+      total: this.storage_balance_bounds().min,
       available: '0'
     };
   }
-}, _applyDecoratedDescriptor(_class2.prototype, "init", [_dec2], Object.getOwnPropertyDescriptor(_class2.prototype, "init"), _class2.prototype), _applyDecoratedDescriptor(_class2.prototype, "ft_total_supply", [_dec3], Object.getOwnPropertyDescriptor(_class2.prototype, "ft_total_supply"), _class2.prototype), _applyDecoratedDescriptor(_class2.prototype, "ft_balance_of", [_dec4], Object.getOwnPropertyDescriptor(_class2.prototype, "ft_balance_of"), _class2.prototype), _applyDecoratedDescriptor(_class2.prototype, "ft_metadata", [_dec5], Object.getOwnPropertyDescriptor(_class2.prototype, "ft_metadata"), _class2.prototype), _applyDecoratedDescriptor(_class2.prototype, "ft_transfer", [_dec6], Object.getOwnPropertyDescriptor(_class2.prototype, "ft_transfer"), _class2.prototype), _applyDecoratedDescriptor(_class2.prototype, "storage_deposit", [_dec7], Object.getOwnPropertyDescriptor(_class2.prototype, "storage_deposit"), _class2.prototype), _applyDecoratedDescriptor(_class2.prototype, "storage_balance_of", [_dec8], Object.getOwnPropertyDescriptor(_class2.prototype, "storage_balance_of"), _class2.prototype), _class2)) || _class);
+
+  // Add this method for better wallet integration
+  ft_supports_storage_management() {
+    return true;
+  }
+
+  // Add this method for better wallet integration
+  ft_supports_transfer_call() {
+    return true;
+  }
+}, _applyDecoratedDescriptor(_class2.prototype, "init", [_dec2], Object.getOwnPropertyDescriptor(_class2.prototype, "init"), _class2.prototype), _applyDecoratedDescriptor(_class2.prototype, "ft_approve", [_dec3], Object.getOwnPropertyDescriptor(_class2.prototype, "ft_approve"), _class2.prototype), _applyDecoratedDescriptor(_class2.prototype, "ft_batch_transfer", [_dec4], Object.getOwnPropertyDescriptor(_class2.prototype, "ft_batch_transfer"), _class2.prototype), _applyDecoratedDescriptor(_class2.prototype, "ft_allowance", [_dec5], Object.getOwnPropertyDescriptor(_class2.prototype, "ft_allowance"), _class2.prototype), _applyDecoratedDescriptor(_class2.prototype, "ft_balance_of", [_dec6], Object.getOwnPropertyDescriptor(_class2.prototype, "ft_balance_of"), _class2.prototype), _applyDecoratedDescriptor(_class2.prototype, "ft_metadata", [_dec7], Object.getOwnPropertyDescriptor(_class2.prototype, "ft_metadata"), _class2.prototype), _applyDecoratedDescriptor(_class2.prototype, "ft_total_supply", [_dec8], Object.getOwnPropertyDescriptor(_class2.prototype, "ft_total_supply"), _class2.prototype), _applyDecoratedDescriptor(_class2.prototype, "ft_transfer", [_dec9], Object.getOwnPropertyDescriptor(_class2.prototype, "ft_transfer"), _class2.prototype), _applyDecoratedDescriptor(_class2.prototype, "ft_transfer_call", [_dec10], Object.getOwnPropertyDescriptor(_class2.prototype, "ft_transfer_call"), _class2.prototype), _applyDecoratedDescriptor(_class2.prototype, "storage_deposit", [_dec11], Object.getOwnPropertyDescriptor(_class2.prototype, "storage_deposit"), _class2.prototype), _applyDecoratedDescriptor(_class2.prototype, "storage_balance_bounds", [_dec12], Object.getOwnPropertyDescriptor(_class2.prototype, "storage_balance_bounds"), _class2.prototype), _applyDecoratedDescriptor(_class2.prototype, "storage_balance_of", [_dec13], Object.getOwnPropertyDescriptor(_class2.prototype, "storage_balance_of"), _class2.prototype), _applyDecoratedDescriptor(_class2.prototype, "ft_supports_storage_management", [_dec14], Object.getOwnPropertyDescriptor(_class2.prototype, "ft_supports_storage_management"), _class2.prototype), _applyDecoratedDescriptor(_class2.prototype, "ft_supports_transfer_call", [_dec15], Object.getOwnPropertyDescriptor(_class2.prototype, "ft_supports_transfer_call"), _class2.prototype), _class2)) || _class);
+function ft_supports_transfer_call() {
+  const _state = FungibleToken._getState();
+  if (!_state && FungibleToken._requireInit()) {
+    throw new Error("Contract must be initialized");
+  }
+  const _contract = FungibleToken._create();
+  if (_state) {
+    FungibleToken._reconstruct(_contract, _state);
+  }
+  const _args = FungibleToken._getArgs();
+  const _result = _contract.ft_supports_transfer_call(_args);
+  if (_result !== undefined) if (_result && _result.constructor && _result.constructor.name === "NearPromise") _result.onReturn();else env.value_return(FungibleToken._serialize(_result, true));
+}
+function ft_supports_storage_management() {
+  const _state = FungibleToken._getState();
+  if (!_state && FungibleToken._requireInit()) {
+    throw new Error("Contract must be initialized");
+  }
+  const _contract = FungibleToken._create();
+  if (_state) {
+    FungibleToken._reconstruct(_contract, _state);
+  }
+  const _args = FungibleToken._getArgs();
+  const _result = _contract.ft_supports_storage_management(_args);
+  if (_result !== undefined) if (_result && _result.constructor && _result.constructor.name === "NearPromise") _result.onReturn();else env.value_return(FungibleToken._serialize(_result, true));
+}
 function storage_balance_of() {
   const _state = FungibleToken._getState();
   if (!_state && FungibleToken._requireInit()) {
@@ -2659,6 +3181,19 @@ function storage_balance_of() {
   }
   const _args = FungibleToken._getArgs();
   const _result = _contract.storage_balance_of(_args);
+  if (_result !== undefined) if (_result && _result.constructor && _result.constructor.name === "NearPromise") _result.onReturn();else env.value_return(FungibleToken._serialize(_result, true));
+}
+function storage_balance_bounds() {
+  const _state = FungibleToken._getState();
+  if (!_state && FungibleToken._requireInit()) {
+    throw new Error("Contract must be initialized");
+  }
+  const _contract = FungibleToken._create();
+  if (_state) {
+    FungibleToken._reconstruct(_contract, _state);
+  }
+  const _args = FungibleToken._getArgs();
+  const _result = _contract.storage_balance_bounds(_args);
   if (_result !== undefined) if (_result && _result.constructor && _result.constructor.name === "NearPromise") _result.onReturn();else env.value_return(FungibleToken._serialize(_result, true));
 }
 function storage_deposit() {
@@ -2675,6 +3210,20 @@ function storage_deposit() {
   FungibleToken._saveToStorage(_contract);
   if (_result !== undefined) if (_result && _result.constructor && _result.constructor.name === "NearPromise") _result.onReturn();else env.value_return(FungibleToken._serialize(_result, true));
 }
+function ft_transfer_call() {
+  const _state = FungibleToken._getState();
+  if (!_state && FungibleToken._requireInit()) {
+    throw new Error("Contract must be initialized");
+  }
+  const _contract = FungibleToken._create();
+  if (_state) {
+    FungibleToken._reconstruct(_contract, _state);
+  }
+  const _args = FungibleToken._getArgs();
+  const _result = _contract.ft_transfer_call(_args);
+  FungibleToken._saveToStorage(_contract);
+  if (_result !== undefined) if (_result && _result.constructor && _result.constructor.name === "NearPromise") _result.onReturn();else env.value_return(FungibleToken._serialize(_result, true));
+}
 function ft_transfer() {
   const _state = FungibleToken._getState();
   if (!_state && FungibleToken._requireInit()) {
@@ -2687,6 +3236,19 @@ function ft_transfer() {
   const _args = FungibleToken._getArgs();
   const _result = _contract.ft_transfer(_args);
   FungibleToken._saveToStorage(_contract);
+  if (_result !== undefined) if (_result && _result.constructor && _result.constructor.name === "NearPromise") _result.onReturn();else env.value_return(FungibleToken._serialize(_result, true));
+}
+function ft_total_supply() {
+  const _state = FungibleToken._getState();
+  if (!_state && FungibleToken._requireInit()) {
+    throw new Error("Contract must be initialized");
+  }
+  const _contract = FungibleToken._create();
+  if (_state) {
+    FungibleToken._reconstruct(_contract, _state);
+  }
+  const _args = FungibleToken._getArgs();
+  const _result = _contract.ft_total_supply(_args);
   if (_result !== undefined) if (_result && _result.constructor && _result.constructor.name === "NearPromise") _result.onReturn();else env.value_return(FungibleToken._serialize(_result, true));
 }
 function ft_metadata() {
@@ -2715,7 +3277,7 @@ function ft_balance_of() {
   const _result = _contract.ft_balance_of(_args);
   if (_result !== undefined) if (_result && _result.constructor && _result.constructor.name === "NearPromise") _result.onReturn();else env.value_return(FungibleToken._serialize(_result, true));
 }
-function ft_total_supply() {
+function ft_allowance() {
   const _state = FungibleToken._getState();
   if (!_state && FungibleToken._requireInit()) {
     throw new Error("Contract must be initialized");
@@ -2725,7 +3287,35 @@ function ft_total_supply() {
     FungibleToken._reconstruct(_contract, _state);
   }
   const _args = FungibleToken._getArgs();
-  const _result = _contract.ft_total_supply(_args);
+  const _result = _contract.ft_allowance(_args);
+  if (_result !== undefined) if (_result && _result.constructor && _result.constructor.name === "NearPromise") _result.onReturn();else env.value_return(FungibleToken._serialize(_result, true));
+}
+function ft_batch_transfer() {
+  const _state = FungibleToken._getState();
+  if (!_state && FungibleToken._requireInit()) {
+    throw new Error("Contract must be initialized");
+  }
+  const _contract = FungibleToken._create();
+  if (_state) {
+    FungibleToken._reconstruct(_contract, _state);
+  }
+  const _args = FungibleToken._getArgs();
+  const _result = _contract.ft_batch_transfer(_args);
+  FungibleToken._saveToStorage(_contract);
+  if (_result !== undefined) if (_result && _result.constructor && _result.constructor.name === "NearPromise") _result.onReturn();else env.value_return(FungibleToken._serialize(_result, true));
+}
+function ft_approve() {
+  const _state = FungibleToken._getState();
+  if (!_state && FungibleToken._requireInit()) {
+    throw new Error("Contract must be initialized");
+  }
+  const _contract = FungibleToken._create();
+  if (_state) {
+    FungibleToken._reconstruct(_contract, _state);
+  }
+  const _args = FungibleToken._getArgs();
+  const _result = _contract.ft_approve(_args);
+  FungibleToken._saveToStorage(_contract);
   if (_result !== undefined) if (_result && _result.constructor && _result.constructor.name === "NearPromise") _result.onReturn();else env.value_return(FungibleToken._serialize(_result, true));
 }
 function init() {
@@ -2740,5 +3330,5 @@ function init() {
   if (_result !== undefined) if (_result && _result.constructor && _result.constructor.name === "NearPromise") _result.onReturn();else env.value_return(FungibleToken._serialize(_result, true));
 }
 
-export { ft_balance_of, ft_metadata, ft_total_supply, ft_transfer, init, storage_balance_of, storage_deposit };
+export { ft_allowance, ft_approve, ft_balance_of, ft_batch_transfer, ft_metadata, ft_supports_storage_management, ft_supports_transfer_call, ft_total_supply, ft_transfer, ft_transfer_call, init, storage_balance_bounds, storage_balance_of, storage_deposit };
 //# sourceMappingURL=hello_near.js.map
